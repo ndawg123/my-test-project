@@ -18,6 +18,16 @@ def main():
     parser.add_argument(
         "--upload-dir", default="uploads", help="Directory for storing uploaded images."
     )
+    parser.add_argument(
+        "--ocr", choices=["tesseract", "google_vision"],
+        default=None,
+        help="OCR provider (default: env OCR_PROVIDER or tesseract).",
+    )
+    parser.add_argument(
+        "--database", choices=["sqlite", "notion"],
+        default=None,
+        help="Database provider (default: env DATABASE_PROVIDER or sqlite).",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -40,15 +50,15 @@ def main():
 
     # --- get ---
     get_parser = subparsers.add_parser("get", help="Get a journal entry by ID.")
-    get_parser.add_argument("entry_id", type=int, help="Entry ID.")
+    get_parser.add_argument("entry_id", help="Entry ID.")
 
     # --- delete ---
     delete_parser = subparsers.add_parser("delete", help="Delete a journal entry.")
-    delete_parser.add_argument("entry_id", type=int, help="Entry ID.")
+    delete_parser.add_argument("entry_id", help="Entry ID.")
 
     # --- re-ocr ---
     reocr_parser = subparsers.add_parser("re-ocr", help="Re-run OCR on an existing entry.")
-    reocr_parser.add_argument("entry_id", type=int, help="Entry ID.")
+    reocr_parser.add_argument("entry_id", help="Entry ID.")
 
     # --- stats ---
     subparsers.add_parser("stats", help="Show database statistics.")
@@ -77,7 +87,21 @@ def main():
         )
         return
 
-    with JournalAgent(db_path=args.db, upload_dir=args.upload_dir) as agent:
+    def _parse_entry_id(raw: str):
+        """Return int for SQLite IDs, string for Notion UUIDs."""
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+
+    agent_kwargs = dict(
+        db_path=args.db,
+        upload_dir=args.upload_dir,
+        ocr_provider=args.ocr,
+        db_provider=args.database,
+    )
+
+    with JournalAgent(**agent_kwargs) as agent:
         if args.command == "ingest":
             tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
             result = agent.ingest(
@@ -110,21 +134,21 @@ def main():
                     print(f"  [{e['id']}] {e.get('title') or '(untitled)'}{tags_str}  ({e['created_at'][:10]})")
 
         elif args.command == "get":
-            entry = agent.get_entry(args.entry_id)
+            entry = agent.get_entry(_parse_entry_id(args.entry_id))
             if not entry:
                 print(f"Entry {args.entry_id} not found.")
                 sys.exit(1)
             print(json.dumps(dict(entry), indent=2))
 
         elif args.command == "delete":
-            if agent.delete_entry(args.entry_id):
+            if agent.delete_entry(_parse_entry_id(args.entry_id)):
                 print(f"Deleted entry {args.entry_id}.")
             else:
                 print(f"Entry {args.entry_id} not found.")
                 sys.exit(1)
 
         elif args.command == "re-ocr":
-            result = agent.re_ocr_entry(args.entry_id)
+            result = agent.re_ocr_entry(_parse_entry_id(args.entry_id))
             if not result:
                 print(f"Entry {args.entry_id} not found.")
                 sys.exit(1)

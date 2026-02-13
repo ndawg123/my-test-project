@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from journal_agent.database import JournalDatabase
-from journal_agent.ocr import extract_text, extract_text_with_confidence
+from journal_agent.database import DatabaseProvider, JournalDatabase, get_database_provider
+from journal_agent.ocr import OCRProvider, extract_text, extract_text_with_confidence, get_ocr_provider, set_default_provider
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +24,39 @@ class JournalAgent:
         self,
         db_path: str | Path = "journal_entries.db",
         upload_dir: str | Path = "uploads",
+        ocr_provider: str | OCRProvider | None = None,
+        db_provider: str | DatabaseProvider | None = None,
+        notion_api_key: Optional[str] = None,
+        notion_database_id: Optional[str] = None,
     ):
-        self.db = JournalDatabase(db_path)
+        # --- OCR provider ---
+        if isinstance(ocr_provider, OCRProvider):
+            self._ocr = ocr_provider
+        else:
+            self._ocr = get_ocr_provider(ocr_provider)
+        set_default_provider(self._ocr)
+
+        # --- Database provider ---
+        if isinstance(db_provider, DatabaseProvider):
+            self.db = db_provider
+        elif db_provider == "notion" or (db_provider is None and notion_api_key):
+            from journal_agent.database import NotionDatabase
+            self.db = NotionDatabase(
+                api_key=notion_api_key,
+                database_id=notion_database_id,
+            )
+        else:
+            self.db = get_database_provider(
+                db_provider, db_path=db_path
+            )
+
         self.upload_dir = Path(upload_dir)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     def start(self) -> None:
         """Initialize the agent (open DB connection)."""
         self.db.connect()
-        logger.info("JournalAgent started. DB: %s, Uploads: %s", self.db.db_path, self.upload_dir)
+        logger.info("JournalAgent started (OCR: %s, DB: %s)", type(self._ocr).__name__, type(self.db).__name__)
 
     def stop(self) -> None:
         """Shut down the agent (close DB connection)."""
@@ -88,7 +112,7 @@ class JournalAgent:
             entry_date=entry_date,
         )
 
-        logger.info("Ingested entry id=%d from %s (%d chars extracted)", entry_id, image_path.name, len(extracted_text))
+        logger.info("Ingested entry id=%s from %s (%d chars extracted)", entry_id, image_path.name, len(extracted_text))
 
         return {
             "id": entry_id,
@@ -143,7 +167,8 @@ class JournalAgent:
         """Search across all journal entries by text content.
 
         Args:
-            query: Full-text search query (supports FTS5 syntax like AND, OR, NEAR).
+            query: Full-text search query (supports FTS5 syntax like AND, OR, NEAR
+                   when using SQLite; plain substring match with Notion).
             limit: Max results to return.
             offset: Number of results to skip.
 
@@ -152,7 +177,7 @@ class JournalAgent:
         """
         return self.db.search(query, limit=limit, offset=offset)
 
-    def get_entry(self, entry_id: int) -> Optional[dict]:
+    def get_entry(self, entry_id: int | str) -> Optional[dict]:
         """Get a single journal entry by its ID."""
         return self.db.get_entry(entry_id)
 
@@ -162,7 +187,7 @@ class JournalAgent:
         """List journal entries, optionally filtered by tag."""
         return self.db.list_entries(limit=limit, offset=offset, tag=tag)
 
-    def delete_entry(self, entry_id: int) -> bool:
+    def delete_entry(self, entry_id: int | str) -> bool:
         """Delete a journal entry and its stored image.
 
         Returns:
@@ -182,14 +207,14 @@ class JournalAgent:
 
     def update_entry(
         self,
-        entry_id: int,
+        entry_id: int | str,
         title: Optional[str] = None,
         tags: Optional[list[str]] = None,
     ) -> bool:
         """Update metadata on an existing entry."""
         return self.db.update_entry(entry_id, title=title, tags=tags)
 
-    def re_ocr_entry(self, entry_id: int, preprocess: bool = True) -> Optional[dict]:
+    def re_ocr_entry(self, entry_id: int | str, preprocess: bool = True) -> Optional[dict]:
         """Re-run OCR on an existing entry's image.
 
         Useful if OCR settings or preprocessing have improved.
@@ -212,5 +237,6 @@ class JournalAgent:
         return {
             "total_entries": self.db.count_entries(),
             "upload_dir": str(self.upload_dir),
-            "db_path": str(self.db.db_path),
+            "db_backend": type(self.db).__name__,
+            "ocr_backend": type(self._ocr).__name__,
         }

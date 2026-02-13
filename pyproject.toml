@@ -13,6 +13,8 @@ dependencies = [
     "Pillow>=10.0.0",
     "pytesseract>=0.3.10",
     "python-multipart>=0.0.6",
+    "notion-client>=2.0.0",
+    "google-cloud-vision>=3.4.0",
 ]
 
 [project.optional-dependencies]

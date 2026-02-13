@@ -12,6 +12,9 @@ from pydantic import BaseModel
 
 from journal_agent.agent import JournalAgent
 
+# Support both int (SQLite) and str (Notion UUID) entry IDs
+EntryID = int | str
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,14 @@ def get_agent() -> JournalAgent:
         agent = JournalAgent()
         agent.start()
     return agent
+
+
+def _parse_id(entry_id: str) -> int | str:
+    """Coerce entry_id to int for SQLite, keep as string for Notion."""
+    try:
+        return int(entry_id)
+    except ValueError:
+        return entry_id
 
 
 @asynccontextmanager
@@ -49,7 +60,7 @@ app = FastAPI(
 
 
 class IngestResponse(BaseModel):
-    id: int
+    id: EntryID
     image_path: str
     extracted_text: str
     title: Optional[str] = None
@@ -58,7 +69,7 @@ class IngestResponse(BaseModel):
 
 
 class SearchResult(BaseModel):
-    id: int
+    id: EntryID
     image_path: str
     extracted_text: str
     title: Optional[str] = None
@@ -69,7 +80,7 @@ class SearchResult(BaseModel):
 
 
 class EntryResponse(BaseModel):
-    id: int
+    id: EntryID
     image_path: str
     extracted_text: str
     title: Optional[str] = None
@@ -87,7 +98,8 @@ class UpdateRequest(BaseModel):
 class StatsResponse(BaseModel):
     total_entries: int
     upload_dir: str
-    db_path: str
+    db_backend: str
+    ocr_backend: str
 
 
 # --- Endpoints ---
@@ -154,18 +166,18 @@ def list_entries(
 
 
 @app.get("/entries/{entry_id}", response_model=EntryResponse)
-def get_entry(entry_id: int):
+def get_entry(entry_id: str):
     """Get a single journal entry by ID."""
-    entry = get_agent().get_entry(entry_id)
+    entry = get_agent().get_entry(_parse_id(entry_id))
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     return entry
 
 
 @app.get("/entries/{entry_id}/image")
-def get_entry_image(entry_id: int):
+def get_entry_image(entry_id: str):
     """Download the original image for a journal entry."""
-    entry = get_agent().get_entry(entry_id)
+    entry = get_agent().get_entry(_parse_id(entry_id))
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
 
@@ -177,29 +189,30 @@ def get_entry_image(entry_id: int):
 
 
 @app.patch("/entries/{entry_id}")
-def update_entry(entry_id: int, body: UpdateRequest):
+def update_entry(entry_id: str, body: UpdateRequest):
     """Update the title or tags on a journal entry."""
+    eid = _parse_id(entry_id)
     updated = get_agent().update_entry(
-        entry_id, title=body.title, tags=body.tags
+        eid, title=body.title, tags=body.tags
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Entry not found")
-    return get_agent().get_entry(entry_id)
+    return get_agent().get_entry(eid)
 
 
 @app.delete("/entries/{entry_id}")
-def delete_entry(entry_id: int):
+def delete_entry(entry_id: str):
     """Delete a journal entry and its image."""
-    deleted = get_agent().delete_entry(entry_id)
+    deleted = get_agent().delete_entry(_parse_id(entry_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"deleted": True, "id": entry_id}
 
 
 @app.post("/entries/{entry_id}/re-ocr")
-def re_ocr_entry(entry_id: int):
+def re_ocr_entry(entry_id: str):
     """Re-run OCR on an existing entry's image (useful after OCR improvements)."""
-    result = get_agent().re_ocr_entry(entry_id)
+    result = get_agent().re_ocr_entry(_parse_id(entry_id))
     if not result:
         raise HTTPException(status_code=404, detail="Entry not found")
     return result

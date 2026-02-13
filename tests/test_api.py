@@ -146,3 +146,5 @@ class TestAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["total_entries"] == 0
+        assert "db_backend" in data
+        assert "ocr_backend" in data
